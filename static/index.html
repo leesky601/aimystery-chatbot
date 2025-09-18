@@ -647,6 +647,12 @@
         <div class="chat-header">
             <h1>가전구독 할래? 말래?</h1>
             <div class="subtitle">대신 정해드립니다.</div>
+            <div style="margin-top: 10px;">
+                <label style="color: white; font-size: 12px; cursor: pointer;">
+                    <input type="checkbox" id="useImprovedFlow" style="margin-right: 5px; cursor: pointer;" checked>
+                    개선된 대화 플로우 사용
+                </label>
+            </div>
         </div>
         
         <div id="productInfo" class="product-info hidden"></div>
@@ -680,6 +686,8 @@
         let currentProduct = null;
         let products = [];
         let lastGuideQuestion = ''; // 마지막 안내봇 질문 저장
+        let conversationHistory = []; // 대화 기록 저장
+        let waitingForUser = false; // 사용자 응답 대기 상태
         
         async function startDebate() {
             const topic = document.getElementById('topicInput').value.trim();
@@ -771,12 +779,17 @@
             }
             
             isDebating = true;
+            conversationHistory = []; // 대화 기록 초기화
             document.getElementById('sendBtn').disabled = true;
             document.getElementById('sendBtn').textContent = 'AI가 분석 중...';
             document.getElementById('chatInput').disabled = true;
             
+            // 개선된 플로우 사용 여부 확인
+            const useImproved = document.getElementById('useImprovedFlow').checked;
+            const endpoint = useImproved ? '/product/debate/improved' : '/product/debate/stream';
+            
             try {
-                const response = await fetch('/product/debate/stream', {
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -823,10 +836,12 @@
                 console.error('Error:', error);
                 addStatusMessage('error', '애매하긴해');
             } finally {
-                isDebating = false;
-                document.getElementById('sendBtn').disabled = false;
-                document.getElementById('sendBtn').textContent = '전송';
-                document.getElementById('chatInput').disabled = false;
+                if (!waitingForUser) {
+                    isDebating = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    document.getElementById('sendBtn').textContent = '전송';
+                    document.getElementById('chatInput').disabled = false;
+                }
             }
         }
 
@@ -994,6 +1009,123 @@
                 '가족이 4명이야',
                 '이제 결론을 내줘'
             ];
+        }
+
+        function showImprovedSuggestionButtons(suggestions) {
+            // 기존 제안 버튼들 제거
+            const existingButtons = document.querySelector('.guide-suggestion-buttons');
+            if (existingButtons) {
+                existingButtons.remove();
+            }
+            
+            // 제안 버튼들 컨테이너 생성
+            const buttonsContainer = document.createElement('div');
+            buttonsContainer.className = 'guide-suggestion-buttons';
+            
+            suggestions.forEach((suggestion, index) => {
+                const button = document.createElement('button');
+                button.className = 'suggestion-btn';
+                button.textContent = suggestion;
+                button.onclick = () => {
+                    handleImprovedSuggestionClick(suggestion);
+                };
+                buttonsContainer.appendChild(button);
+            });
+            
+            // 채팅 메시지 컨테이너에 추가
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.appendChild(buttonsContainer);
+            
+            // 스크롤을 맨 아래로
+            scrollToBottom();
+        }
+        
+        async function handleImprovedSuggestionClick(suggestion) {
+            // 제안 버튼들 숨기기
+            const buttonsContainer = document.querySelector('.guide-suggestion-buttons');
+            if (buttonsContainer) {
+                buttonsContainer.remove();
+            }
+            
+            // 사용자 메시지로 표시
+            addUserMessage(suggestion);
+            
+            // 대화 기록에 추가
+            conversationHistory.push({
+                speaker: '사용자',
+                message: suggestion,
+                turn: conversationHistory.length + 1
+            });
+            
+            // 개선된 플로우 응답 처리
+            await sendImprovedResponse(suggestion);
+        }
+        
+        async function sendImprovedResponse(userInput) {
+            if (!currentProduct || !waitingForUser) return;
+            
+            waitingForUser = false;
+            isDebating = true;
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('sendBtn').textContent = 'AI가 생각 중...';
+            document.getElementById('chatInput').disabled = true;
+            
+            try {
+                const response = await fetch('/product/debate/improved/respond', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        product_id: currentProduct.id,
+                        user_input: userInput,
+                        conversation_history: conversationHistory
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\\n');
+                    
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (line.trim() && line.startsWith('data: ')) {
+                            try {
+                                const jsonStr = line.slice(6).trim();
+                                if (jsonStr) {
+                                    const data = JSON.parse(jsonStr);
+                                    await handleStreamData(data);
+                                }
+                            } catch (e) {
+                                console.error('JSON parse error:', e, 'Line:', line);
+                            }
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                addStatusMessage('error', '응답 처리 중 오류가 발생했습니다.');
+            } finally {
+                if (!waitingForUser) {
+                    isDebating = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    document.getElementById('sendBtn').textContent = '전송';
+                    document.getElementById('chatInput').disabled = false;
+                }
+            }
         }
 
         async function addGuideSuggestionButtons() {
@@ -1484,6 +1616,22 @@
             if (buttonsContainer) {
                 buttonsContainer.remove();
             }
+            
+            // 개선된 플로우에서 사용자 입력 처리
+            if (document.getElementById('useImprovedFlow').checked && waitingForUser) {
+                addUserMessage(userInfo);
+                document.getElementById('chatInput').value = '';
+                
+                // 대화 기록에 추가
+                conversationHistory.push({
+                    speaker: '사용자',
+                    message: userInfo,
+                    turn: conversationHistory.length + 1
+                });
+                
+                await sendImprovedResponse(userInfo);
+                return;
+            }
 
             // 주기 정보 감지 및 가격 업데이트
             const contractInfo = detectContractPeriod(userInfo);
@@ -1900,6 +2048,16 @@
 
         async function handleStreamData(data) {
             console.log('Received data:', data);
+            
+            // 대화 기록에 추가 (개선된 플로우용)
+            if (data.type === 'complete' && data.speaker) {
+                conversationHistory.push({
+                    speaker: data.speaker,
+                    message: currentStreamingMessage ? currentStreamingMessage.content : '',
+                    turn: data.turn || conversationHistory.length + 1
+                });
+            }
+            
             switch (data.type) {
                 case 'start':
                     console.log('Starting debate:', data.message);
@@ -1943,18 +2101,35 @@
                     currentStreamingMessage = null;
                     currentStreamingElement = null;
                     break;
+                case 'guide_question':
+                    // 개선된 플로우: 안내봇 질문과 제안 버튼 표시
+                    console.log('Guide question:', data);
+                    lastGuideQuestion = data.question;
+                    showImprovedSuggestionButtons(data.suggestions);
+                    break;
+                case 'waiting_user':
+                    // 개선된 플로우: 사용자 응답 대기
+                    console.log('Waiting for user:', data.message);
+                    waitingForUser = true;
+                    isDebating = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    document.getElementById('sendBtn').textContent = '전송';
+                    document.getElementById('chatInput').disabled = false;
+                    document.getElementById('chatInput').placeholder = '직접 답변을 입력하거나 제안된 답변을 선택하세요';
+                    break;
                 case 'turn':
                     console.log('Adding turn:', data.data);
                     await addDebateTurn(data.data);
                     break;
                 case 'end':
                     console.log('Ending debate:', data.message);
+                    waitingForUser = false;
                     // 논쟁이 끝나면 사용자 입력 섹션 표시
                     showUserInfoSection();
                     break;
                 case 'error':
                     console.log('Error:', data.message);
-                    addStatusMessage('error', '애매하긴해');
+                    addStatusMessage('error', '애맨하긴해');
                     break;
                 default:
                     console.log('Unknown data type:', data);

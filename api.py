@@ -11,6 +11,7 @@ import httpx
 import base64
 from chatbots import ChatBotManager
 from product_manager import ProductManager
+from chatbot_flow import ImprovedChatBotFlow
 from config import Config
 
 app = FastAPI(
@@ -35,6 +36,7 @@ if os.path.exists("static"):
 # 전역 매니저
 chatbot_manager = ChatBotManager()
 product_manager = ProductManager()
+improved_flow = ImprovedChatBotFlow()
 
 # 데이터 기반 논쟁 엔드포인트 임포트 및 등록
 from api_data_debate import register_data_debate_endpoints
@@ -54,6 +56,7 @@ class ProductDebateRequest(BaseModel):
     product_id: int
     max_turns: Optional[int] = 3
     user_info: Optional[str] = None
+    use_improved_flow: Optional[bool] = True  # 새 플로우 사용 여부
 
 class TTSRequest(BaseModel):
     text: str
@@ -640,6 +643,183 @@ async def continue_debate(request: dict):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"논쟁 계속 중 오류 발생: {str(e)}")
 
+@app.post("/product/debate/improved")
+async def start_improved_debate_flow(request: ProductDebateRequest):
+    """개선된 대화 플로우를 사용한 제품 논쟁"""
+    async def generate_improved_debate():
+        try:
+            # 제품 정보 확인
+            product = product_manager.get_product_by_id(request.product_id)
+            if not product:
+                yield f"data: {json.dumps({'error': f'제품 ID {request.product_id}를 찾을 수 없습니다.'})}\n\n"
+                return
+            
+            # 1단계: 초기 의견 생성 (구매봇, 구독봇)
+            initial_arguments = improved_flow.get_initial_arguments(request.product_id)
+            
+            # 시작 메시지
+            product_name = product["name"]
+            yield f"data: {json.dumps({'type': 'start', 'product': product, 'message': f'{product_name} - 구매 vs 구독 분석 시작'})}\n\n"
+            
+            # 구매봇 초기 의견
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': '구매봇'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            purchase_message = initial_arguments.get('purchase', '')
+            for i in range(0, len(purchase_message), 30):
+                chunk = purchase_message[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': '구매봇', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': '구매봇', 'turn': 1})}\n\n"
+            
+            # 구독봇 초기 의견
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': '구독봇'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            subscription_message = initial_arguments.get('subscription', '')
+            for i in range(0, len(subscription_message), 30):
+                chunk = subscription_message[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': '구독봇', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': '구독봇', 'turn': 2})}\n\n"
+            
+            # 2단계: 안내봇의 질문과 제안
+            guide_question = improved_flow.generate_guide_question(request.product_id, 1)
+            
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            guide_message = f"구매와 구독 각각 장단점이 있네요. {guide_question['question']}"
+            for i in range(0, len(guide_message), 30):
+                chunk = guide_message[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': '안내봇', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            # 질문 제안 전달
+            yield f"data: {json.dumps({'type': 'guide_question', 'question': guide_question['question'], 'suggestions': guide_question['suggestions']})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': '안내봇', 'turn': 3})}\n\n"
+            
+            # 대화 종료 (사용자 입력 대기)
+            yield f"data: {json.dumps({'type': 'waiting_user', 'message': '사용자 응답을 기다리는 중...'})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'논쟁 중 오류 발생: {str(e)}'})}\n\n"
+    
+    return StreamingResponse(
+        generate_improved_debate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache", 
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+
+class ImprovedFlowUserRequest(BaseModel):
+    product_id: int
+    user_input: str
+    conversation_history: List[Dict[str, Any]]
+
+@app.post("/product/debate/improved/respond")
+async def respond_to_user_improved(request: ImprovedFlowUserRequest):
+    """개선된 플로우에서 사용자 응답 처리"""
+    async def generate_response():
+        try:
+            # 사용자가 "이제 결론을 내줘"를 선택한 경우
+            if request.user_input == "이제 결론을 내줘":
+                final_conclusion = improved_flow.generate_final_conclusion(
+                    request.product_id, 
+                    request.conversation_history
+                )
+                
+                yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
+                await asyncio.sleep(0.5)
+                
+                for i in range(0, len(final_conclusion), 30):
+                    chunk = final_conclusion[i:i+30]
+                    yield f"data: {json.dumps({'type': 'streaming', 'speaker': '안내봇', 'content': chunk})}\n\n"
+                    await asyncio.sleep(0.02)
+                
+                yield f"data: {json.dumps({'type': 'complete', 'speaker': '안내봇'})}\n\n"
+                yield f"data: {json.dumps({'type': 'end', 'message': '상담이 완료되었습니다.'})}\n\n"
+                return
+            
+            # 랜덤으로 응답할 봇 선택
+            import random
+            responding_bot = random.choice(['구매봇', '구독봇'])
+            
+            # 사용자 입력에 대한 봇 응답 생성
+            bot_response = improved_flow.generate_response_to_user(
+                request.product_id,
+                request.user_input,
+                responding_bot,
+                request.conversation_history
+            )
+            
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': responding_bot})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            for i in range(0, len(bot_response), 30):
+                chunk = bot_response[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': responding_bot, 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': responding_bot})}\n\n"
+            
+            # 상대 봇의 반박 또는 주제 전환
+            other_bot = '구독봇' if responding_bot == '구매봇' else '구매봇'
+            turn_count = len([msg for msg in request.conversation_history if msg.get('speaker') in ['구매봇', '구독봇']])
+            
+            rebuttal = improved_flow.generate_rebuttal(
+                request.product_id,
+                bot_response,
+                other_bot,
+                turn_count + 1
+            )
+            
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': other_bot})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            for i in range(0, len(rebuttal), 30):
+                chunk = rebuttal[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': other_bot, 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': other_bot})}\n\n"
+            
+            # 다음 질문 생성
+            next_question = improved_flow.generate_guide_question(request.product_id, turn_count + 2)
+            
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            guide_message = f"좋은 포인트네요! {next_question['question']}"
+            for i in range(0, len(guide_message), 30):
+                chunk = guide_message[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': '안내봇', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'guide_question', 'question': next_question['question'], 'suggestions': next_question['suggestions']})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': '안내봇'})}\n\n"
+            yield f"data: {json.dumps({'type': 'waiting_user', 'message': '사용자 응답을 기다리는 중...'})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'응답 처리 중 오류 발생: {str(e)}'})}\n\n"
+    
+    return StreamingResponse(
+        generate_response(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache", 
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn
