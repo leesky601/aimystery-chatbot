@@ -655,7 +655,7 @@ async def start_improved_debate_flow(request: ProductDebateRequest):
                 return
             
             # 1단계: 초기 의견 생성 (구매봇, 구독봇)
-            initial_arguments = improved_flow.get_initial_arguments(request.product_id)
+            initial_arguments = await improved_flow.get_initial_arguments(request.product_id)
             
             # 시작 메시지
             product_name = product["name"]
@@ -753,7 +753,7 @@ async def respond_to_user_improved(request: ImprovedFlowUserRequest):
             responding_bot = random.choice(['구매봇', '구독봇'])
             
             # 사용자 입력에 대한 봇 응답 생성
-            bot_response = improved_flow.generate_response_to_user(
+            bot_response = await improved_flow.generate_response_to_user(
                 request.product_id,
                 request.user_input,
                 responding_bot,
@@ -774,7 +774,7 @@ async def respond_to_user_improved(request: ImprovedFlowUserRequest):
             other_bot = '구독봇' if responding_bot == '구매봇' else '구매봇'
             turn_count = len([msg for msg in request.conversation_history if msg.get('speaker') in ['구매봇', '구독봇']])
             
-            rebuttal = improved_flow.generate_rebuttal(
+            rebuttal = await improved_flow.generate_rebuttal(
                 request.product_id,
                 bot_response,
                 other_bot,
@@ -791,13 +791,39 @@ async def respond_to_user_improved(request: ImprovedFlowUserRequest):
             
             yield f"data: {json.dumps({'type': 'complete', 'speaker': other_bot})}\n\n"
             
-            # 다음 질문 생성
-            next_question = improved_flow.generate_guide_question(request.product_id, turn_count + 2)
+            # 8번 단계: 첫 번째 봇이 다시 반박
+            final_rebuttal = await improved_flow.generate_rebuttal(
+                request.product_id,
+                rebuttal,
+                responding_bot,
+                turn_count + 2
+            )
+            
+            yield f"data: {json.dumps({'type': 'typing', 'speaker': responding_bot})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            for i in range(0, len(final_rebuttal), 30):
+                chunk = final_rebuttal[i:i+30]
+                yield f"data: {json.dumps({'type': 'streaming', 'speaker': responding_bot, 'content': chunk})}\n\n"
+                await asyncio.sleep(0.02)
+            
+            yield f"data: {json.dumps({'type': 'complete', 'speaker': responding_bot})}\n\n"
+            
+            # 9번 단계: 안내봇이 정리하고 다음 질문 생성
+            next_question = improved_flow.generate_guide_question(request.product_id, turn_count + 3)
             
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
             await asyncio.sleep(0.5)
             
-            guide_message = f"좋은 포인트네요! {next_question['question']}"
+            # 안내봇 메시지를 더 자연스럽게
+            guide_intros = [
+                "흥미로운 논쟁이긴해!",
+                "둘 다 일리가 있긴해!",
+                "각자 좋은 점이 있긴해!",
+                "재미있는 토론이긴해!",
+                "이런 관점도 있긴해!"
+            ]
+            guide_message = f"{random.choice(guide_intros)} {next_question['question']}"
             for i in range(0, len(guide_message), 30):
                 chunk = guide_message[i:i+30]
                 yield f"data: {json.dumps({'type': 'streaming', 'speaker': '안내봇', 'content': chunk})}\n\n"
