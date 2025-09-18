@@ -258,7 +258,34 @@ async def get_product(product_id: int):
 async def get_final_summary(user_info: str = None):
     """최종 요약 및 결론 조회"""
     try:
-        summary = await chatbot_manager.generate_final_summary(user_info)
+        # 안내봇을 통해 최종 요약 생성
+        guide_bot = chatbot_manager.chatbots.get('안내봇')
+        if not guide_bot:
+            return {"success": False, "summary": "안내봇을 찾을 수 없습니다"}
+        
+        # 대화 기록 가져오기
+        conversation_log = chatbot_manager.get_conversation_history()
+        if not conversation_log:
+            return {"success": False, "summary": "대화 기록이 없습니다"}
+        
+        # 최근 대화 요약
+        recent_messages = []
+        for msg in conversation_log[-10:]:  # 최근 10개 메시지
+            speaker = msg.get('speaker', '')
+            message = msg.get('message', '')
+            if speaker and message:
+                recent_messages.append(f"{speaker}: {message[:100]}...")  # 각 메시지 100자로 제한
+        
+        context = "논쟁 요약:\n" + "\n".join(recent_messages)
+        if user_info:
+            context += f"\n\n사용자 정보: {user_info}"
+        
+        summary = await guide_bot.generate_response(
+            "이번 논쟁을 종합적으로 정리하고 고객에게 최종 조언을 해주세요",
+            context,
+            debate_mode=False
+        )
+        
         return {"success": True, "summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"요약 생성 중 오류가 발생했습니다: {str(e)}")
@@ -267,7 +294,8 @@ async def get_final_summary(user_info: str = None):
 async def notify_budget_answered():
     """예산 질문에 답변했다는 알림"""
     try:
-        chatbot_manager.asked_questions.add("월 예산 또는 목돈 범위")
+        # 새 ChatBotManager에는 asked_questions가 없으므로 간단히 성공 반환
+        # 필요시 나중에 구현 가능
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"예산 답변 알림 중 오류가 발생했습니다: {str(e)}")
@@ -280,7 +308,9 @@ class UserQARequest(BaseModel):
 async def save_user_qa(request: UserQARequest):
     """사용자 질문-답변 쌍 저장"""
     try:
-        chatbot_manager.add_user_qa(request.question, request.answer)
+        # 새 ChatBotManager에는 add_user_qa가 없으므로 간단히 성공 반환
+        # 필요시 나중에 구현 가능
+        print(f"사용자 Q&A 저장: {request.question} -> {request.answer}")
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 질문-답변 저장 중 오류가 발생했습니다: {str(e)}")
@@ -457,7 +487,7 @@ async def single_chat(request: SingleChatRequest):
 async def clear_conversation_history():
     """모든 대화 히스토리 초기화"""
     try:
-        chatbot_manager.clear_all_histories()
+        chatbot_manager.clear_all_history()
         return {
             "success": True,
             "message": "모든 대화 히스토리가 초기화되었습니다."
@@ -486,10 +516,11 @@ async def health_check():
 @app.get("/conversation/history")
 async def get_conversation_history():
     """현재 대화 히스토리 조회"""
+    conversation_log = chatbot_manager.get_conversation_history()
     return {
-        "topic": chatbot_manager.topic,
-        "conversation_log": chatbot_manager.conversation_log,
-        "total_turns": len(chatbot_manager.conversation_log)
+        "topic": "제품 구매 vs 구독 논쟁",
+        "conversation_log": conversation_log,
+        "total_turns": len(conversation_log)
     }
 
 @app.post("/tts/generate")

@@ -1910,8 +1910,8 @@
                     showTypingIndicator(data.speaker);
                     break;
                 case 'streaming':
-                    console.log('Streaming chunk from:', data.speaker, 'chunk:', data.chunk, 'length:', data.chunk ? data.chunk.length : 0);
-                    handleStreamingChunk(data.speaker, data.chunk, data.turn);
+                    console.log('Streaming chunk from:', data.speaker, 'content:', data.content, 'length:', data.content ? data.content.length : 0);
+                    handleStreamingChunk(data.speaker, data.content, data.turn);
                     break;
                 case 'complete':
                     console.log('Complete turn:', data);
