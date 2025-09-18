@@ -11,7 +11,7 @@ import httpx
 import base64
 from chatbots import ChatBotManager
 from product_manager import ProductManager
-from chatbot_flow import ImprovedChatBotFlow
+from chatbot_flow_v3 import dynamic_ai_system
 from config import Config
 
 app = FastAPI(
@@ -36,7 +36,7 @@ if os.path.exists("static"):
 # 전역 매니저
 chatbot_manager = ChatBotManager()
 product_manager = ProductManager()
-improved_flow = ImprovedChatBotFlow()
+# dynamic_ai_system은 이미 chatbot_flow_v3에서 싱글톤으로 생성됨
 
 # 데이터 기반 논쟁 엔드포인트 임포트 및 등록
 from api_data_debate import register_data_debate_endpoints
@@ -645,7 +645,7 @@ async def continue_debate(request: dict):
 
 @app.post("/product/debate/improved")
 async def start_improved_debate_flow(request: ProductDebateRequest):
-    """개선된 대화 플로우를 사용한 제품 논쟁"""
+    """완전히 새로운 AI 대화 플로우"""
     async def generate_improved_debate():
         try:
             # 제품 정보 확인
@@ -654,18 +654,22 @@ async def start_improved_debate_flow(request: ProductDebateRequest):
                 yield f"data: {json.dumps({'error': f'제품 ID {request.product_id}를 찾을 수 없습니다.'})}\n\n"
                 return
             
-            # 1단계: 초기 의견 생성 (구매봇, 구독봇)
-            initial_arguments = await improved_flow.get_initial_arguments(request.product_id)
+            product_name = product["name"]
+            conversation_history = []
             
             # 시작 메시지
-            product_name = product["name"]
-            yield f"data: {json.dumps({'type': 'start', 'product': product, 'message': f'{product_name} - 구매 vs 구독 분석 시작'})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'product': product, 'message': f'{product_name} - 구매 vs 구독 AI 분석'})}\n\n"
             
-            # 구매봇 초기 의견
+            # 1. 구매봇의 자유로운 의견
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '구매봇'})}\n\n"
             await asyncio.sleep(0.5)
             
-            purchase_message = initial_arguments.get('purchase', '')
+            purchase_message = await ai_flow.generate_purchase_bot_argument(
+                request.product_id, 
+                {'history': conversation_history}
+            )
+            conversation_history.append({'speaker': '구매봇', 'message': purchase_message})
+            
             for i in range(0, len(purchase_message), 30):
                 chunk = purchase_message[i:i+30]
                 yield f"data: {json.dumps({'type': 'streaming', 'speaker': '구매봇', 'content': chunk})}\n\n"
@@ -673,11 +677,16 @@ async def start_improved_debate_flow(request: ProductDebateRequest):
             
             yield f"data: {json.dumps({'type': 'complete', 'speaker': '구매봇', 'turn': 1})}\n\n"
             
-            # 구독봇 초기 의견
+            # 2. 구독봇의 자유로운 의견
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '구독봇'})}\n\n"
             await asyncio.sleep(0.5)
             
-            subscription_message = initial_arguments.get('subscription', '')
+            subscription_message = await ai_flow.generate_subscription_bot_argument(
+                request.product_id,
+                {'history': conversation_history}
+            )
+            conversation_history.append({'speaker': '구독봇', 'message': subscription_message})
+            
             for i in range(0, len(subscription_message), 30):
                 chunk = subscription_message[i:i+30]
                 yield f"data: {json.dumps({'type': 'streaming', 'speaker': '구독봇', 'content': chunk})}\n\n"
@@ -685,27 +694,39 @@ async def start_improved_debate_flow(request: ProductDebateRequest):
             
             yield f"data: {json.dumps({'type': 'complete', 'speaker': '구독봇', 'turn': 2})}\n\n"
             
-            # 2단계: 안내봇의 질문과 제안
-            guide_question = await improved_flow.generate_guide_question(request.product_id, 1)
-            
+            # 3. 안내봇의 자연스러운 질문
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
             await asyncio.sleep(0.5)
             
-            guide_message = f"구매와 구독 각각 장단점이 있네요. {guide_question['question']}"
-            for i in range(0, len(guide_message), 30):
-                chunk = guide_message[i:i+30]
+            guide_question = await ai_flow.generate_guide_bot_question(
+                request.product_id,
+                conversation_history
+            )
+            
+            guide_intro = random.choice([
+                "둘 다 좋은 점이 있긴해!",
+                "각자 장단점이 있긴해!",
+                "흥미로운 의견들이긴해!",
+                "고민이 되긴해!"
+            ])
+            
+            full_message = f"{guide_intro} {guide_question['question']}"
+            conversation_history.append({'speaker': '안내봇', 'message': full_message})
+            
+            for i in range(0, len(full_message), 30):
+                chunk = full_message[i:i+30]
                 yield f"data: {json.dumps({'type': 'streaming', 'speaker': '안내봇', 'content': chunk})}\n\n"
                 await asyncio.sleep(0.02)
             
             # 질문 제안 전달
-            yield f"data: {json.dumps({'type': 'guide_question', 'question': guide_question['question'], 'suggestions': guide_question['suggestions']})}\n\n"
+            yield f"data: {json.dumps({'type': 'guide_question', 'question': guide_question['question'], 'suggestions': guide_question['suggestions'], 'history': conversation_history})}\n\n"
             yield f"data: {json.dumps({'type': 'complete', 'speaker': '안내봇', 'turn': 3})}\n\n"
-            
-            # 대화 종료 (사용자 입력 대기)
-            yield f"data: {json.dumps({'type': 'waiting_user', 'message': '사용자 응답을 기다리는 중...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'waiting_user', 'message': '사용자 응답 대기 중...'})}\n\n"
             
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': f'논쟁 중 오류 발생: {str(e)}'})}\n\n"
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': f'오류 발생: {str(e)}'})}\n\n"
     
     return StreamingResponse(
         generate_improved_debate(),

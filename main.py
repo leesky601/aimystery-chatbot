@@ -10,9 +10,9 @@ if __name__ == "__main__":
         print(f"📚 API 문서: http://{Config.HOST}:{Config.PORT}/docs")
         print("=" * 50)
         
-        # 서버 실행
+        # 서버 실행 - v3 사용
         uvicorn.run(
-            "api:app",
+            "api_v3:app",
             host=Config.HOST,
             port=Config.PORT,
             reload=True,
