@@ -3,6 +3,7 @@
 """
 from typing import List, Dict, Optional, Any
 import random
+import re
 from datetime import datetime
 from product_manager import ProductManager
 import asyncio
@@ -42,20 +43,22 @@ class ImprovedChatBotFlow:
         purchase_prompt = f"{product['name']} 구매의 전반적인 장점을 2-3문장으로 설명해. 김원훈 말투(~긴해)를 사용해. 가격과 소유의 장점을 강조해."
         purchase_argument = await self.generate_natural_response(purchase_prompt, purchase_context, "구매봇")
         
-        # 구독봇 초기 의견
+        # 구독봇 초기 의견 (최대 할인 적용)
         subscription_prices = product.get('subscription_price', {})
         if subscription_prices:
+            best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
+            price_info = self._calculate_discounted_subscription_price(product, best_period)
+            
             subscription_context = f"""
             제품: {product['name']}
-            구독 가격:
+            {best_period} 구독 가격:
+            - 기본: 월 {price_info['base_monthly']:,}원
+            - 할인 적용: 월 {price_info['final_monthly']:,}원 
+            - 총 {price_info['total_months']}개월 {price_info['total']:,}원
+            - 할인 내역: {price_info['discount_details']}
             """
-            for period, price in subscription_prices.items():
-                period_years = int(period.replace('년', ''))
-                total_months = period_years * 12
-                total_price = price * total_months
-                subscription_context += f"{period} 계약: 월 {price:,}원 (총 {total_months}개월, {total_price:,}원)\n"
             
-            subscription_prompt = f"{product['name']} 구독의 전반적인 장점을 2-3문장으로 설명해. 반드시 계약 기간과 총 금액을 포함해. 김원훈 말투(~긴해)를 사용해."
+            subscription_prompt = f"{product['name']} 구독의 전반적인 장점을 2-3문장으로 설명해. 할인된 가격과 계약 기간, 총 금액을 포함해. 김원훈 말투(~긴해)를 사용해."
             subscription_argument = await self.generate_natural_response(subscription_prompt, subscription_context, "구독봇")
         else:
             subscription_argument = "구독이 훨씬 편하긴해! 부담 없이 시작할 수 있긴해!"
@@ -192,12 +195,14 @@ class ImprovedChatBotFlow:
         elif speaker == "구독봇":
             subscription_prices = product.get('subscription_price', {})
             if subscription_prices:
-                for period, price in subscription_prices.items():
-                    period_years = int(period.replace('년', ''))
-                    total_months = period_years * 12
-                    total_price = price * total_months
-                    context += f"{period} 구독: 월 {price:,}원 (총 {total_months}개월, {total_price:,}원)\n"
-            prompt = "사용자의 말에 구독이 왜 좋은지 설명해줘. 구독 가격 말할 때는 반드시 계약 기간과 총 금액을 포함해. 김원훈 말투(~긴해)를 사용해."
+                best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
+                price_info = self._calculate_discounted_subscription_price(product, best_period)
+                context += f"{best_period} 구독 (최대 할인 적용):\n"
+                context += f"- 기본: 월 {price_info['base_monthly']:,}원\n"
+                context += f"- 할인 후: 월 {price_info['final_monthly']:,}원\n"
+                context += f"- 총 {price_info['total_months']}개월 {price_info['total']:,}원\n"
+                context += f"- 할인: {price_info['discount_details']}\n"
+            prompt = "사용자의 말에 구독이 왜 좋은지 설명해줘. 할인된 가격, 계약 기간, 총 금액을 모두 언급해. 김원훈 말투(~긴해)를 사용해."
         else:
             return "적절한 응답을 생성할 수 없긴해."
         
@@ -219,12 +224,12 @@ class ImprovedChatBotFlow:
         elif speaker == "구독봇":
             subscription_prices = product.get('subscription_price', {})
             if subscription_prices:
-                for period, price in subscription_prices.items():
-                    period_years = int(period.replace('년', ''))
-                    total_months = period_years * 12
-                    total_price = price * total_months
-                    context += f"{period} 구독: 월 {price:,}원 (총 {total_months}개월, {total_price:,}원)\n"
-            prompt = "이전 발언에 대해 구독이 왜 더 나은지 반박해줘. 가격 언급시 계약기간과 총액 포함. 반박이 어려우면 다른 구독 장점 얘기해. 김원훈 말투(~긴해) 사용."
+                best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
+                price_info = self._calculate_discounted_subscription_price(product, best_period)
+                context += f"{best_period} 구독 (최대 할인 적용):\n"
+                context += f"- 할인 후: 월 {price_info['final_monthly']:,}원 (총 {price_info['total']:,}원)\n"
+                context += f"- 할인: {price_info['discount_details']}\n"
+            prompt = "이전 발언에 대해 구독이 왜 더 나은지 반박해줘. 할인된 가격과 혜택 강조해. 김원훈 말투(~긴해) 사용."
         else:
             return "그렇긴해..."
         
@@ -320,26 +325,23 @@ class ImprovedChatBotFlow:
         return random.choice(responses)
     
     def _generate_subscription_response(self, product: Dict, user_context: Dict, history_context: Dict) -> str:
-        """구독봇 응답 생성 - 계약 기간과 총 금액 포함"""
+        """구독봇 응답 생성 - 최대 할인 적용된 가격"""
         responses = []
         subscription_prices = product.get('subscription_price', {})
         
         if subscription_prices:
             best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
-            monthly_price = subscription_prices[best_period]
-            period_years = int(best_period.replace('년', ''))
-            total_months = period_years * 12
-            total_price = monthly_price * total_months
+            price_info = self._calculate_discounted_subscription_price(product, best_period)
             
             if user_context.get('budget_conscious'):
-                responses.append(f"{best_period} 계약하면 월 {monthly_price:,}원이긴해! 총 {total_months}개월 {total_price:,}원이니까 목돈 부담 없긴해!")
+                responses.append(f"{best_period} 계약하면 할인 받아서 월 {price_info['final_monthly']:,}원이긴해! 총 {price_info['total']:,}원인데 {price_info['discount_details']}까지 받으면 완전 이득이긴해!")
             
             if user_context.get('service_important'):
-                responses.append(f"{best_period} 구독하면 월 {monthly_price:,}원(총 {total_price:,}원)에 케어서비스까지 포함이긴해! A/S 걱정 없긴해!")
+                responses.append(f"{best_period} 구독하면 할인가 월 {price_info['final_monthly']:,}원에 케어서비스까지 포함이긴해! 총 {price_info['total']:,}원으로 A/S 걱정 없긴해!")
             
             if not responses:
                 # 기본 응답
-                responses.append(f"{best_period} 계약시 월 {monthly_price:,}원이긴해! 총 {total_price:,}원으로 편하게 사용할 수 있긴해!")
+                responses.append(f"{best_period} 계약시 {price_info['discount_details']} 받아서 월 {price_info['final_monthly']:,}원이긴해! 총 {price_info['total']:,}원으로 구매보다 싸긴해!")
         else:
             responses.append("구독이 훨씬 편하긴해!")
         
@@ -385,12 +387,66 @@ class ImprovedChatBotFlow:
         
         return preferences
     
+    def _calculate_discounted_subscription_price(self, product: Dict, period: str) -> Dict:
+        """최대 할인 적용된 구독 가격 계산"""
+        base_monthly_price = product.get('subscription_price', {}).get(period, 0)
+        if base_monthly_price == 0:
+            return {'monthly': 0, 'total': 0, 'discount_details': ''}
+        
+        period_years = int(period.replace('년', ''))
+        total_months = period_years * 12
+        
+        # 1. 선결제 할인 찾기 (subscription_benefits에서)
+        prepay_discount = 0
+        membership_points = 0
+        benefits = product.get('subscription_benefits', [])
+        
+        for benefit in benefits:
+            if '선 결제' in benefit and '할인' in benefit:
+                # "구독 요금의 30% 선 결제 시, 월 2,600원 추가 할인" 같은 패턴 파싱
+                import re
+                discount_match = re.search(r'월\s*([\d,]+)원\s*(?:추가\s*)?할인', benefit)
+                if discount_match:
+                    prepay_discount = int(discount_match.group(1).replace(',', ''))
+            
+            if '멤버십 포인트' in benefit and '적립' in benefit:
+                # "구독 시 LG전자 멤버십 포인트 250,000P 적립됨" 같은 패턴 파싱
+                points_match = re.search(r'([\d,]+)P', benefit)
+                if points_match:
+                    membership_points = int(points_match.group(1).replace(',', ''))
+        
+        # 2. 제휴 카드 할인 (최대 22,000원)
+        card_discount = min(22000, int(base_monthly_price * 0.2))  # 보통 20% 정도, 최대 22,000원
+        
+        # 3. 최종 월 구독료 계산
+        final_monthly_price = base_monthly_price - prepay_discount - card_discount
+        final_monthly_price = max(0, final_monthly_price)  # 음수 방지
+        
+        # 4. 총 비용 계산 (멤버십 포인트는 총액에서 차감)
+        total_price = (final_monthly_price * total_months) - membership_points
+        
+        # 할인 내역 문자열 생성
+        discount_details = []
+        if prepay_discount > 0:
+            discount_details.append(f"선결제 할인 월 {prepay_discount:,}원")
+        if card_discount > 0:
+            discount_details.append(f"제휴카드 할인 월 {card_discount:,}원")
+        if membership_points > 0:
+            discount_details.append(f"멤버십 포인트 {membership_points:,}P 적립")
+        
+        return {
+            'base_monthly': base_monthly_price,
+            'final_monthly': final_monthly_price,
+            'total': total_price,
+            'total_months': total_months,
+            'discount_details': ', '.join(discount_details) if discount_details else '할인 없음'
+        }
+    
     def _get_best_subscription_price(self, product: Dict) -> int:
-        """최적 구독 가격 반환"""
+        """최적 구독 가격 반환 (최대 할인 적용)"""
         subscription_prices = product.get('subscription_price', {})
         if subscription_prices:
-            if '6년' in subscription_prices:
-                return subscription_prices['6년']
-            else:
-                return list(subscription_prices.values())[-1]
+            best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
+            price_info = self._calculate_discounted_subscription_price(product, best_period)
+            return price_info['final_monthly']
         return 0
