@@ -787,7 +787,8 @@
             // 개선된 플로우 사용 여부 확인
             const useImproved = document.getElementById('useImprovedFlow').checked;
             // v3로 업그레이드 - 완전히 동적인 AI 시스템 사용
-            const endpoint = useImproved ? '/product/debate/dynamic' : '/product/debate/stream';
+            // improved 옵션을 선택하면 dynamic 엔드포인트 사용
+            const endpoint = useImproved ? '/product/debate/improved' : '/product/debate/stream';
             
             try {
                 const response = await fetch(endpoint, {
@@ -1072,7 +1073,7 @@
             document.getElementById('chatInput').disabled = true;
             
             try {
-                const response = await fetch('/product/debate/dynamic/respond', {
+                const response = await fetch('/product/debate/improved/respond', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

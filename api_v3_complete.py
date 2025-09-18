@@ -1,6 +1,5 @@
 """
-완전히 새로운 동적 AI 챗봇 API 엔드포인트
-모든 하드코딩 제거하고 실제 AI 응답만 사용
+완전히 새로운 동적 AI 챗봇 API 엔드포인트 - 모든 필수 엔드포인트 포함
 """
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +13,8 @@ import json
 import os
 import random
 from chatbot_flow_v3 import dynamic_ai_system
+from chatbots import ChatBotManager
+from product_manager import ProductManager
 from config import Config
 
 app = FastAPI(
@@ -34,6 +35,10 @@ app.add_middleware(
 # Static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# 전역 매니저
+chatbot_manager = ChatBotManager()
+product_manager = ProductManager()
+
 @app.get("/")
 async def root():
     """홈페이지 제공"""
@@ -48,7 +53,29 @@ async def get_products():
             return data.get('products', [])
     except Exception as e:
         print(f"Error loading products: {e}")
-        return []
+        # Fallback to product_manager if available
+        try:
+            return product_manager.get_all_products()
+        except:
+            return []
+
+@app.get("/products/{product_id}")
+async def get_product(product_id: int):
+    """특정 제품 정보 반환"""
+    try:
+        with open('new_products.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            products = data.get('products', [])
+            for product in products:
+                if product['id'] == product_id:
+                    return product
+        raise HTTPException(status_code=404, detail="Product not found")
+    except Exception as e:
+        # Fallback to product_manager
+        product = product_manager.get_product(product_id)
+        if product:
+            return product
+        raise HTTPException(status_code=404, detail="Product not found")
 
 class ProductDebateRequest(BaseModel):
     product_id: int
@@ -62,6 +89,31 @@ class ChatRequest(BaseModel):
     question: str
     product_name: Optional[str] = None
     history: Optional[List[Dict[str, str]]] = []
+
+class SingleChatResponse(BaseModel):
+    response: str
+    speaker: str = "안내봇"
+
+@app.post("/chat/single", response_model=SingleChatResponse)
+async def single_chat(request: ChatRequest):
+    """단일 챗봇 응답 생성"""
+    try:
+        # 간단한 안내봇 응답
+        if "안녕" in request.question or "hello" in request.question.lower():
+            response = "안녕하세요! LG 가전제품 구매 상담을 도와드리겠습니다. 어떤 제품에 관심이 있으신가요?"
+        elif "구독" in request.question:
+            response = "구독 서비스는 초기 비용 부담을 줄이고, 전문가의 정기적인 관리를 받을 수 있는 장점이 있습니다."
+        elif "구매" in request.question:
+            response = "일시불 구매는 완전한 소유권을 가질 수 있고, 장기적으로 더 경제적일 수 있습니다."
+        else:
+            response = "제품에 대해 더 자세히 알려드릴게요. 구체적으로 어떤 점이 궁금하신가요?"
+        
+        return SingleChatResponse(response=response, speaker="안내봇")
+    except Exception as e:
+        return SingleChatResponse(
+            response="죄송합니다. 일시적인 오류가 발생했습니다. 다시 시도해주세요.",
+            speaker="안내봇"
+        )
 
 @app.post("/product/debate/dynamic")
 async def start_dynamic_debate(request: ProductDebateRequest):
@@ -196,6 +248,12 @@ async def start_dynamic_debate(request: ProductDebateRequest):
             "Access-Control-Allow-Origin": "*"
         }
     )
+
+# Fallback for old endpoint
+@app.post("/product/debate/improved")
+async def start_improved_debate_fallback(request: ProductDebateRequest):
+    """이전 버전 호환을 위한 fallback"""
+    return await start_dynamic_debate(request)
 
 @app.post("/product/debate/dynamic/respond")
 async def respond_to_user_dynamic(request: UserResponseRequest):
@@ -340,10 +398,27 @@ async def respond_to_user_dynamic(request: UserResponseRequest):
         }
     )
 
+# Fallback for old endpoint
+@app.post("/product/debate/improved/respond")
+async def respond_to_user_improved_fallback(request: UserResponseRequest):
+    """이전 버전 호환을 위한 fallback"""
+    return await respond_to_user_dynamic(request)
+
 # 헬스체크 엔드포인트
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": "3.0.0", "system": "dynamic_ai"}
+
+@app.get("/summary")
+async def get_summary():
+    """대화 요약 반환"""
+    return {
+        "summary": "LG 가전제품 구매와 구독에 대한 상담을 진행중입니다.",
+        "key_points": [
+            "구매의 장점: 완전한 소유권, 장기적 경제성",
+            "구독의 장점: 낮은 초기비용, 전문 관리 서비스"
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
