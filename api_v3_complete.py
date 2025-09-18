@@ -50,14 +50,16 @@ async def get_products():
     try:
         with open('new_products.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data.get('products', [])
+            products = data.get('products', [])
+            return {"success": True, "products": products}
     except Exception as e:
         print(f"Error loading products: {e}")
         # Fallback to product_manager if available
         try:
-            return product_manager.get_all_products()
+            products = product_manager.get_all_products()
+            return {"success": True, "products": products}
         except:
-            return []
+            return {"success": False, "products": []}
 
 @app.get("/products/{product_id}")
 async def get_product(product_id: int):
