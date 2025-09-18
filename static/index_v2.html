@@ -1910,15 +1910,8 @@
                     showTypingIndicator(data.speaker);
                     break;
                 case 'streaming':
-                    // 디버깅: 실제 데이터 구조 확인
-                    console.log('DEBUG - Full data object:', data);
-                    console.log('DEBUG - data.content:', data.content);
-                    console.log('DEBUG - typeof data.content:', typeof data.content);
-                    
-                    // content 필드 사용 (chunk가 아닌)
-                    const messageContent = data.content || data.chunk;  // 폴백 추가
-                    console.log('Streaming content from:', data.speaker, 'content:', messageContent, 'length:', messageContent ? messageContent.length : 0);
-                    handleStreamingChunk(data.speaker, messageContent, data.turn);
+                    console.log('Streaming chunk from:', data.speaker, 'content:', data.content, 'length:', data.content ? data.content.length : 0);
+                    handleStreamingChunk(data.speaker, data.content, data.turn);
                     break;
                 case 'complete':
                     console.log('Complete turn:', data);
