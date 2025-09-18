@@ -27,24 +27,31 @@ class ImprovedChatBotFlow:
         self.api_url = Config.FRIENDLI_BASE_URL
         
     async def get_initial_arguments(self, product_id: int) -> Dict[str, str]:
-        """초기 구매/구독 전반적인 의견 생성 - AI를 활용한 자연스러운 응답"""
+        """초기 구매/구독 전반적인 의견 생성 - 완전 AI 기반"""
         product = self.product_manager.get_product_by_id(product_id)
         if not product:
             return {}
         
-        # 구매봇 초기 의견 
-        purchase_price = product.get('purchase_price', 0)
+        # 구매봇 초기 의견 - 완전 AI 생성
+        purchase_benefits = product.get('purchase_benefits', [])
         purchase_context = f"""
         제품: {product['name']}
-        구매 가격: {purchase_price:,}원
-        중고 판매 예상가: {int(purchase_price * 0.5):,}원
+        구매 가격: {product.get('purchase_price', 0):,}원
+        구매 혜택: {', '.join(purchase_benefits[:3]) if purchase_benefits else '완전 소유권, 장기적 경제성'}
+        중고 판매 가능 예상가: {int(product.get('purchase_price', 0) * 0.5):,}원
         """
         
-        purchase_prompt = f"{product['name']} 구매의 전반적인 장점을 2-3문장으로 설명해. 김원훈 말투(~긴해)를 사용해. 가격과 소유의 장점을 강조해."
+        purchase_prompt = f"""당신은 구매를 적극 추천하는 구매봇입니다. 
+        {product['name']} 구매가 왜 최고의 선택인지 열정적으로 설명하세요.
+        반드시 구체적인 가격과 혜택을 언급하며 3-4문장으로 작성하세요.
+        김원훈 말투(모든 문장 끝에 ~긴해)를 사용하세요."""
+        
         purchase_argument = await self.generate_natural_response(purchase_prompt, purchase_context, "구매봇")
         
-        # 구독봇 초기 의견 (최대 할인 적용)
+        # 구독봇 초기 의견 - 완전 AI 생성
         subscription_prices = product.get('subscription_price', {})
+        subscription_benefits = product.get('subscription_benefits', [])
+        
         if subscription_prices:
             best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
             price_info = self._calculate_discounted_subscription_price(product, best_period)
@@ -53,15 +60,24 @@ class ImprovedChatBotFlow:
             제품: {product['name']}
             {best_period} 구독 가격:
             - 기본: 월 {price_info['base_monthly']:,}원
-            - 할인 적용: 월 {price_info['final_monthly']:,}원 
+            - 최종 할인가: 월 {price_info['final_monthly']:,}원 
             - 총 {price_info['total_months']}개월 {price_info['total']:,}원
             - 할인 내역: {price_info['discount_details']}
+            구독 혜택: {', '.join(subscription_benefits[:3]) if subscription_benefits else '케어서비스, 무상 A/S'}
             """
             
-            subscription_prompt = f"{product['name']} 구독의 전반적인 장점을 2-3문장으로 설명해. 할인된 가격과 계약 기간, 총 금액을 포함해. 김원훈 말투(~긴해)를 사용해."
+            subscription_prompt = f"""당신은 구독을 적극 추천하는 구독봇입니다.
+            {product['name']} 구독이 왜 최고의 선택인지 열정적으로 설명하세요.
+            반드시 {best_period} 계약, 할인된 월 가격, 총액, 혜택을 모두 언급하세요.
+            김원훈 말투(모든 문장 끝에 ~긴해)를 사용하세요."""
+            
             subscription_argument = await self.generate_natural_response(subscription_prompt, subscription_context, "구독봇")
         else:
-            subscription_argument = "구독이 훨씬 편하긴해! 부담 없이 시작할 수 있긴해!"
+            subscription_argument = await self.generate_natural_response(
+                "구독 서비스의 장점을 열정적으로 설명하세요. 김원훈 말투 사용.",
+                f"제품: {product['name']}",
+                "구독봇"
+            )
         
         return {
             'purchase': purchase_argument.strip(),
@@ -124,39 +140,47 @@ class ImprovedChatBotFlow:
         else:
             return "둘 다 장단점이 있긴해!"
     
-    def generate_guide_question(self, product_id: int, turn: int) -> Dict[str, Any]:
-        """안내봇의 사용자 맞춤 질문 생성"""
-        questions = [
+    async def generate_guide_question(self, product_id: int, turn: int, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+        """안내봇의 사용자 맞춤 질문 생성 - AI 기반으로 개선"""
+        product = self.product_manager.get_product_by_id(product_id)
+        
+        # 기본 질문 풀
+        base_questions = [
             {
-                'question': "고객님의 월 예산은 어느 정도이신가요?",
+                'focus': '예산',
+                'question': "고객님의 예산은 어떻게 되시나요?긴해?",
                 'suggestions': [
                     "월 5만원 이하로 부담없이 사용하고 싶어요",
                     "초기 비용이 부담되지만 장기적으로 절약하고 싶어요"
                 ]
             },
             {
-                'question': "제품을 얼마나 오래 사용하실 계획이신가요?",
+                'focus': '사용기간',
+                'question': "얼마나 오래 사용하실 계획이신가요?긴해?",
                 'suggestions': [
                     "최소 5년 이상 장기간 사용할 예정이에요",
                     "2-3년 정도 사용하다가 신제품으로 교체하고 싶어요"
                 ]
             },
             {
-                'question': "A/S와 관리 서비스가 얼마나 중요하신가요?",
+                'focus': '서비스',
+                'question': "전문가 관리가 필요하신가요?긴해?",
                 'suggestions': [
                     "전문가 관리와 정기 점검이 꼭 필요해요",
                     "간단한 관리는 직접 할 수 있어요"
                 ]
             },
             {
-                'question': "제품 교체 주기를 어떻게 생각하시나요?",
+                'focus': '교체주기',
+                'question': "언제쯤 새 제품으로 바꾸실 생각이신가요?긴해?",
                 'suggestions': [
                     "한 번 사면 고장날 때까지 사용하고 싶어요",
                     "최신 기능이 나오면 교체하고 싶어요"
                 ]
             },
             {
-                'question': "초기 투자 비용에 대한 부담은 어느 정도인가요?",
+                'focus': '초기비용',
+                'question': "목돈 부담은 괜찮으신가요?긴해?",
                 'suggestions': [
                     "여유 자금이 있어서 일시불 구매도 가능해요",
                     "매달 조금씩 나가는 게 부담이 적어요"
@@ -164,50 +188,59 @@ class ImprovedChatBotFlow:
             }
         ]
         
-        # 턴에 따라 다른 질문 선택
-        question_index = (turn - 1) % len(questions)
-        selected_question = questions[question_index]
+        # 대화 맥락에 따라 적절한 질문 선택
+        if conversation_history and len(conversation_history) > 2:
+            # 이미 답변한 주제는 피하기
+            asked_topics = []
+            for msg in conversation_history:
+                text = msg.get('message', '').lower()
+                if '예산' in text or '비용' in text: asked_topics.append('예산')
+                if '기간' in text or '오래' in text: asked_topics.append('사용기간')
+                if '서비스' in text or '관리' in text: asked_topics.append('서비스')
+            
+            # 아직 안 물어본 질문 우선
+            available_questions = [q for q in base_questions if q['focus'] not in asked_topics]
+            if available_questions:
+                selected_question = random.choice(available_questions)
+            else:
+                selected_question = random.choice(base_questions)
+        else:
+            # 턴 기반 기본 선택
+            question_index = (turn - 1) % len(base_questions)
+            selected_question = base_questions[question_index]
         
         # "이제 결론을 내줘" 옵션 추가
-        selected_question['suggestions'].append("이제 결론을 내줘")
+        result = {
+            'question': selected_question['question'],
+            'suggestions': selected_question['suggestions'].copy()
+        }
+        result['suggestions'].append("이제 결론을 내줘")
         
-        return selected_question
+        return result
     
     async def generate_response_to_user(self, product_id: int, user_input: str, speaker: str, conversation_history: List[Dict]) -> str:
-        """사용자 답변에 대한 챗봇 응답 생성"""
+        """사용자 답변에 대한 챗봇 응답 생성 - 완전 AI 기반"""
         product = self.product_manager.get_product_by_id(product_id)
         if not product:
-            return "제품 정보를 찾을 수 없긴해."
-        
-        # 사용자 입력 분석 (70% 비중)
-        user_context = self._analyze_user_input(user_input)
-        
-        # 대화 히스토리 분석 (30% 비중)
-        history_context = self._analyze_conversation_history(conversation_history)
-        
-        # AI를 활용한 자연스러운 응답 생성
-        context = f"제품: {product['name']}\n"
-        context += f"사용자 입력: {user_input}\n"
+            return await self.generate_natural_response(
+                "제품 정보가 없다고 말해줘", 
+                "제품 정보 없음",
+                speaker
+            )
         
         if speaker == "구매봇":
-            context += f"구매 가격: {product.get('purchase_price', 0):,}원\n"
-            prompt = "사용자의 말에 구매가 왜 좋은지 설명해줘. 김원훈 말투(~긴해)를 사용해."
+            return await self._generate_purchase_response(product, user_input, conversation_history)
         elif speaker == "구독봇":
-            subscription_prices = product.get('subscription_price', {})
-            if subscription_prices:
-                best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
-                price_info = self._calculate_discounted_subscription_price(product, best_period)
-                context += f"{best_period} 구독 (최대 할인 적용):\n"
-                context += f"- 기본: 월 {price_info['base_monthly']:,}원\n"
-                context += f"- 할인 후: 월 {price_info['final_monthly']:,}원\n"
-                context += f"- 총 {price_info['total_months']}개월 {price_info['total']:,}원\n"
-                context += f"- 할인: {price_info['discount_details']}\n"
-            prompt = "사용자의 말에 구독이 왜 좋은지 설명해줘. 할인된 가격, 계약 기간, 총 금액을 모두 언급해. 김원훈 말투(~긴해)를 사용해."
+            return await self._generate_subscription_response(product, user_input, conversation_history)
         else:
-            return "적절한 응답을 생성할 수 없긴해."
-        
-        response = await self.generate_natural_response(prompt, context, speaker)
-        return response
+            # 안내봇이나 기타 응답
+            context = f"""
+            제품: {product['name']}
+            사용자 입력: {user_input}
+            대화 맥락: {' / '.join([f"{msg['speaker']}: {msg['message'][:50]}" for msg in conversation_history[-3:]])}
+            """
+            prompt = "사용자의 질문에 친절하고 중립적으로 답변해줘. 김원훈 말투(~긴해) 사용."
+            return await self.generate_natural_response(prompt, context, speaker)
     
     async def generate_rebuttal(self, product_id: int, previous_message: str, speaker: str, turn: int) -> str:
         """이전 발언에 대한 반박 생성"""
@@ -236,156 +269,95 @@ class ImprovedChatBotFlow:
         response = await self.generate_natural_response(prompt, context, speaker)
         return response
     
-    def generate_final_conclusion(self, product_id: int, conversation_history: List[Dict]) -> str:
-        """안내봇의 최종 결론"""
+    async def generate_final_conclusion(self, product_id: int, conversation_history: List[Dict]) -> str:
+        """안내봇의 최종 결론 - 완전 AI 기반"""
         product = self.product_manager.get_product_by_id(product_id)
         if not product:
-            return "제품 정보를 기반으로 결론을 내릴 수 없습니다."
+            return await self.generate_natural_response(
+                "제품 정보가 없다고 안내해줘",
+                "제품 정보 없음",
+                "안내봇"
+            )
         
-        # 대화 내용 분석
-        purchase_points = 0
-        subscription_points = 0
+        # 구독 가격 정보 계산
+        subscription_prices = product.get('subscription_price', {})
+        price_info = None
+        if subscription_prices:
+            best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
+            price_info = self._calculate_discounted_subscription_price(product, best_period)
         
-        for msg in conversation_history:
-            if "구매" in msg.get('message', ''):
-                if any(keyword in msg['message'] for keyword in ['저렴', '경제적', '소유', '중고']):
-                    purchase_points += 1
-            if "구독" in msg.get('message', ''):
-                if any(keyword in msg['message'] for keyword in ['케어', 'A/S', '부담', '할인']):
-                    subscription_points += 1
+        # 대화 내용 요약
+        user_messages = [msg['message'] for msg in conversation_history if msg.get('speaker') == '사용자']
+        bot_messages = [f"{msg['speaker']}: {msg['message'][:100]}" for msg in conversation_history[-6:]]
         
-        # 사용자 응답 분석
-        user_preferences = self._analyze_user_preferences(conversation_history)
+        context = f"""
+        제품: {product['name']}
+        구매가: {product.get('purchase_price', 0):,}원
+        구독가: {f"{price_info['final_monthly']:,}원/월 (총 {price_info['total']:,}원)" if price_info else '정보 없음'}
         
-        # 최종 추천
-        if purchase_points > subscription_points:
-            recommendation = "구매"
-            reason = "장기적 경제성과 완전한 소유권"
-        elif subscription_points > purchase_points:
-            recommendation = "구독"
-            reason = "낮은 초기 비용과 전문 관리 서비스"
-        else:
-            recommendation = "구매 또는 구독"
-            reason = "고객님의 상황에 따라 선택"
-        
-        conclusion = f"""
-        종합적인 분석 결과를 말씀드리겠습니다.
-        
-        고객님께는 **{recommendation}**을 추천드립니다.
-        
-        주요 이유:
-        - {reason}
-        - 고객님의 답변을 고려한 맞춤 추천
-        
-        {product['name']}의 경우:
-        - 구매: {product.get('purchase_price', 0):,}원 (일시불)
-        - 구독: 월 {self._get_best_subscription_price(product):,}원
-        
-        최종 선택은 고객님의 개인적 상황을 고려하여 결정하시기 바랍니다.
+        사용자 답변들: {' / '.join(user_messages[-3:]) if user_messages else '없음'}
+        최근 대화: {' / '.join(bot_messages)}
         """
         
-        return conclusion.strip()
+        prompt = f"""당신은 중립적인 안내봇입니다.
+        지금까지의 대화를 분석하여 고객에게 구매와 구독 중 무엇이 더 적합한지 최종 결론을 내려주세요.
+        사용자의 답변과 선호도를 고려하여 명확한 추천을 해주세요.
+        구체적인 가격과 이유를 포함하여 3-4문장으로 작성하세요.
+        김원훈 말투(~긴해)를 사용하세요."""
+        
+        return await self.generate_natural_response(prompt, context, "안내봇")
     
     # Private helper methods
-    def _analyze_user_input(self, user_input: str) -> Dict:
-        """사용자 입력 분석"""
-        context = {
-            'budget_conscious': any(word in user_input for word in ['부담', '비싸', '저렴', '예산']),
-            'long_term': any(word in user_input for word in ['장기', '오래', '평생', '5년']),
-            'service_important': any(word in user_input for word in ['A/S', '관리', '케어', '서비스']),
-            'ownership_important': any(word in user_input for word in ['소유', '내것', '판매', '중고'])
-        }
-        return context
+    # 분석 헬퍼 메서드들도 제거 - AI가 자체적으로 분석
     
-    def _analyze_conversation_history(self, history: List[Dict]) -> Dict:
-        """대화 히스토리 분석"""
-        topics = []
-        for msg in history[-5:]:  # 최근 5개 메시지
-            if '가격' in msg.get('message', ''):
-                topics.append('price')
-            if '서비스' in msg.get('message', ''):
-                topics.append('service')
-        return {'recent_topics': topics}
+    async def _generate_purchase_response(self, product: Dict, user_input: str, history: List[Dict]) -> str:
+        """구매봇 응답 생성 - 완전 AI 기반"""
+        context = f"""
+        제품: {product['name']}
+        구매가: {product.get('purchase_price', 0):,}원
+        사용자 입력: {user_input}
+        최근 대화: {' / '.join([f"{msg['speaker']}: {msg['message'][:50]}" for msg in history[-3:]])}
+        """
+        
+        prompt = f"""당신은 구매를 추천하는 구매봇입니다.
+        사용자의 입력에 대해 구매가 왜 더 나은 선택인지 설득력 있게 답변하세요.
+        구체적인 가격과 장점을 언급하며 2-3문장으로 답변하세요.
+        김원훈 말투(~긴해)를 반드시 사용하세요."""
+        
+        return await self.generate_natural_response(prompt, context, "구매봇")
     
-    def _generate_purchase_response(self, product: Dict, user_context: Dict, history_context: Dict) -> str:
-        """구매봇 응답 생성"""
-        responses = []
-        
-        if user_context.get('budget_conscious'):
-            responses.append(f"초기 비용이 부담되시는 건 이해하지만, 장기적으로 보면 {product['name']} 구매가 더 경제적이에요!")
-        
-        if user_context.get('long_term'):
-            responses.append(f"5년 이상 사용하신다면 구매가 확실히 유리해요! 구독은 5년이면 총 비용이 구매가보다 훨씬 많아져요.")
-        
-        if not responses:
-            # 기본 응답
-            purchase_price = product.get('purchase_price', 0)
-            responses.append(f"{purchase_price:,}원으로 평생 소유! 이보다 확실한 투자가 어디 있겠어요?")
-        
-        return random.choice(responses)
-    
-    def _generate_subscription_response(self, product: Dict, user_context: Dict, history_context: Dict) -> str:
-        """구독봇 응답 생성 - 최대 할인 적용된 가격"""
-        responses = []
+    async def _generate_subscription_response(self, product: Dict, user_input: str, history: List[Dict]) -> str:
+        """구독봇 응답 생성 - 완전 AI 기반"""
         subscription_prices = product.get('subscription_price', {})
         
         if subscription_prices:
             best_period = '6년' if '6년' in subscription_prices else list(subscription_prices.keys())[-1]
             price_info = self._calculate_discounted_subscription_price(product, best_period)
             
-            if user_context.get('budget_conscious'):
-                responses.append(f"{best_period} 계약하면 할인 받아서 월 {price_info['final_monthly']:,}원이긴해! 총 {price_info['total']:,}원인데 {price_info['discount_details']}까지 받으면 완전 이득이긴해!")
-            
-            if user_context.get('service_important'):
-                responses.append(f"{best_period} 구독하면 할인가 월 {price_info['final_monthly']:,}원에 케어서비스까지 포함이긴해! 총 {price_info['total']:,}원으로 A/S 걱정 없긴해!")
-            
-            if not responses:
-                # 기본 응답
-                responses.append(f"{best_period} 계약시 {price_info['discount_details']} 받아서 월 {price_info['final_monthly']:,}원이긴해! 총 {price_info['total']:,}원으로 구매보다 싸긴해!")
+            context = f"""
+            제품: {product['name']}
+            {best_period} 구독 할인가: 월 {price_info['final_monthly']:,}원
+            총액: {price_info['total']:,}원 ({price_info['total_months']}개월)
+            할인: {price_info['discount_details']}
+            사용자 입력: {user_input}
+            최근 대화: {' / '.join([f"{msg['speaker']}: {msg['message'][:50]}" for msg in history[-3:]])}
+            """
         else:
-            responses.append("구독이 훨씬 편하긴해!")
+            context = f"""
+            제품: {product['name']}
+            사용자 입력: {user_input}
+            """
         
-        return random.choice(responses)
-    
-    def _generate_data_based_rebuttal(self, product: Dict, previous_message: str, speaker: str) -> Optional[str]:
-        """데이터 기반 반박 생성"""
-        if speaker == "구매봇":
-            if "케어" in previous_message or "A/S" in previous_message:
-                return f"구매해도 LG 공식 A/S는 받을 수 있어요! 게다가 {product.get('purchase_price', 0):,}원이면 훨씬 경제적이죠."
-        elif speaker == "구독봇":
-            if "중고" in previous_message or "판매" in previous_message:
-                return "중고로 팔면 반값도 안 돼요! 구독은 항상 최신 상태로 관리받으며 사용할 수 있어요."
-        return None
-    
-    def _generate_topic_shift(self, product: Dict, speaker: str, turn: int) -> str:
-        """주제 전환 응답"""
-        topics = [
-            "그건 그렇고, 초기 비용 얘기를 해볼까요?",
-            "아무튼 장기적인 관점에서 생각해보세요.",
-            "그런데 말이죠, 요즘 트렌드를 아시나요?",
-            "그보다 중요한 건 실제 사용 편의성이에요."
-        ]
-        return random.choice(topics)
-    
-    def _analyze_user_preferences(self, history: List[Dict]) -> Dict:
-        """사용자 선호도 분석"""
-        preferences = {
-            'price_sensitive': False,
-            'service_oriented': False,
-            'long_term_user': False
-        }
+        prompt = f"""당신은 구독을 추천하는 구독봇입니다.
+        사용자의 입력에 대해 구독이 왜 더 나은 선택인지 설득력 있게 답변하세요.
+        반드시 {best_period if subscription_prices else ''} 계약 기간, 할인된 월 가격, 총액을 모두 언급하세요.
+        김원훈 말투(~긴해)를 반드시 사용하세요."""
         
-        for msg in history:
-            if msg.get('speaker') == '사용자':
-                text = msg.get('message', '')
-                if '저렴' in text or '부담' in text:
-                    preferences['price_sensitive'] = True
-                if '서비스' in text or 'A/S' in text:
-                    preferences['service_oriented'] = True
-                if '장기' in text or '오래' in text:
-                    preferences['long_term_user'] = True
-        
-        return preferences
+        return await self.generate_natural_response(prompt, context, "구독봇")
+    
+    # 모든 응답은 AI를 통해 동적으로 생성됨
+    
+    # 사용자 선호도 분석도 AI가 직접 수행
     
     def _calculate_discounted_subscription_price(self, product: Dict, period: str) -> Dict:
         """최대 할인 적용된 구독 가격 계산"""

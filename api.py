@@ -686,7 +686,7 @@ async def start_improved_debate_flow(request: ProductDebateRequest):
             yield f"data: {json.dumps({'type': 'complete', 'speaker': '구독봇', 'turn': 2})}\n\n"
             
             # 2단계: 안내봇의 질문과 제안
-            guide_question = improved_flow.generate_guide_question(request.product_id, 1)
+            guide_question = await improved_flow.generate_guide_question(request.product_id, 1)
             
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
             await asyncio.sleep(0.5)
@@ -731,7 +731,7 @@ async def respond_to_user_improved(request: ImprovedFlowUserRequest):
         try:
             # 사용자가 "이제 결론을 내줘"를 선택한 경우
             if request.user_input == "이제 결론을 내줘":
-                final_conclusion = improved_flow.generate_final_conclusion(
+                final_conclusion = await improved_flow.generate_final_conclusion(
                     request.product_id, 
                     request.conversation_history
                 )
@@ -810,7 +810,11 @@ async def respond_to_user_improved(request: ImprovedFlowUserRequest):
             yield f"data: {json.dumps({'type': 'complete', 'speaker': responding_bot})}\n\n"
             
             # 9번 단계: 안내봇이 정리하고 다음 질문 생성
-            next_question = improved_flow.generate_guide_question(request.product_id, turn_count + 3)
+            next_question = await improved_flow.generate_guide_question(
+                request.product_id, 
+                turn_count + 3,
+                request.conversation_history
+            )
             
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
             await asyncio.sleep(0.5)
