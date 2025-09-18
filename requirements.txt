@@ -1,0 +1,8 @@
+azure-cognitiveservices-speech==1.45.0
+openai==1.102.0
+python-dotenv==1.1.1
+pytz==2025.2
+fastapi==0.104.1
+uvicorn==0.24.0
+httpx==0.28.1
+pydantic==2.11.9
