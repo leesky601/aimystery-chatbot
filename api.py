@@ -317,13 +317,18 @@ async def start_product_debate_stream(request: ProductDebateRequest):
                     
                     # 구독 관련 문맥이고 제외 키워드가 없을 때만 처리
                     if has_subscription_keyword and not has_exclude_keyword:
-                        if product.get('subscription_pricing') and period not in product['subscription_pricing']:
+                        if product.get('subscription_price') and period not in product['subscription_price']:
                             # 지원하지 않는 주기에 대한 안내봇 메시지 생성
-                            available_periods = list(product['subscription_pricing'].keys())
-                            guide_message = await chatbot_manager.generate_contract_guide_message(
-                                period, available_periods, product['name']
-                            )
-                            yield f"data: {json.dumps({'type': 'guide', 'speaker': '안내봇', 'message': guide_message, 'timestamp': '00:00:00'})}\n\n"
+                            available_periods = list(product['subscription_price'].keys())
+                            # 안내봇을 통해 메시지 생성
+                            guide_bot = chatbot_manager.chatbots.get('안내봇')
+                            if guide_bot:
+                                guide_message = await guide_bot.generate_response(
+                                    f"{period} 구독은 지원하지 않습니다. {product['name']}은 {', '.join(available_periods)} 구독만 가능합니다.",
+                                    f"제품: {product['name']}\n사용자 요청 기간: {period}\n지원 기간: {', '.join(available_periods)}",
+                                    debate_mode=False
+                                )
+                                yield f"data: {json.dumps({'type': 'guide', 'speaker': '안내봇', 'message': guide_message, 'timestamp': '00:00:00'})}\n\n"
                             return
             
             # 논쟁 시작 메시지
@@ -333,32 +338,83 @@ async def start_product_debate_stream(request: ProductDebateRequest):
             # 논쟁 시작 전 구매봇 타이핑 인디케이터 표시 (즉시 표시)
             yield f"data: {json.dumps({'type': 'typing', 'speaker': '구매봇'})}\n\n"
             
-            # 제품 기반 스트리밍 논쟁 실행
-            async for stream_data in chatbot_manager.start_streaming_product_debate(
+            # 제품 기반 논쟁 실행 (새로운 데이터 기반 방식)
+            debate_result = await chatbot_manager.start_debate_with_product(
                 product_id=request.product_id,
                 max_turns=4,  # 각자 최소 2번씩 = 총 4턴
                 user_info=request.user_info
-            ):
-                if isinstance(stream_data, dict) and 'type' in stream_data:
-                    # 스트리밍 데이터 (typing, streaming, complete)
+            )
+            
+            # 논쟁 결과를 스트리밍 형태로 전송
+            for idx, turn_data in enumerate(debate_result):
+                # 각 턴에 대해 타이핑 효과와 함께 전송
+                speaker = turn_data.get('speaker', '')
+                
+                # 타이핑 인디케이터 전송 (안내봇 제외)
+                if speaker in ['구매봇', '구독봇']:
+                    yield f"data: {json.dumps({'type': 'typing', 'speaker': speaker})}\n\n"
+                    await asyncio.sleep(0.5)  # 타이핑 효과를 위한 짧은 지연
+                
+                # 메시지 전송 (스트리밍 효과)
+                message = turn_data.get('message', '')
+                # 메시지를 청크로 나누어 전송
+                chunk_size = 20  # 한 번에 전송할 문자 수
+                for i in range(0, len(message), chunk_size):
+                    chunk = message[i:i+chunk_size]
+                    stream_data = {
+                        'type': 'streaming',
+                        'speaker': speaker,
+                        'content': chunk
+                    }
                     yield f"data: {json.dumps(stream_data)}\n\n"
-                else:
-                    # 기존 턴 데이터
-                    yield f"data: {json.dumps({'type': 'turn', 'data': stream_data})}\n\n"
+                    await asyncio.sleep(0.02)  # 스트리밍 효과를 위한 지연
+                
+                # 턴 완료 신호
+                complete_data = {
+                    'type': 'complete',
+                    'speaker': speaker,
+                    'turn': idx + 1,
+                    'timestamp': turn_data.get('timestamp', '')
+                }
+                yield f"data: {json.dumps(complete_data)}\n\n"
             
             # 논쟁이 끝난 후 안내봇이 등장하도록 보장
-            # 안내봇이 아직 등장하지 않았다면 강제로 등장시킴
-            conversation_log = chatbot_manager.conversation_log
-            if not any(msg.get('speaker') == '안내봇' for msg in conversation_log[-3:]):
-                guide_message = await chatbot_manager.generate_guide_message()
-                guide_turn = {
-                    "turn": len(conversation_log) + 1,
-                    "speaker": "안내봇",
-                    "stance": "안내",
-                    "message": guide_message,
-                    "timestamp": chatbot_manager.get_timestamp()
-                }
-                yield f"data: {json.dumps({'type': 'turn', 'data': guide_turn})}\n\n"
+            # 안내봇이 마지막 발언자가 아니라면 확인
+            conversation_log = chatbot_manager.get_conversation_history()
+            if conversation_log and conversation_log[-1].get('speaker') != '안내봇':
+                # 안내봇의 최종 정리 메시지 생성
+                guide_bot = chatbot_manager.chatbots.get('안내봇')
+                if guide_bot:
+                    from datetime import datetime
+                    guide_message = await guide_bot.generate_response(
+                        "논쟁을 정리하고 고객에게 도움이 되는 조언을 해주세요",
+                        f"제품: {product_name}\n논쟁 요약 완료",
+                        debate_mode=False
+                    )
+                    
+                    # 타이핑 효과
+                    yield f"data: {json.dumps({'type': 'typing', 'speaker': '안내봇'})}\n\n"
+                    await asyncio.sleep(0.5)
+                    
+                    # 스트리밍 전송
+                    for i in range(0, len(guide_message), 20):
+                        chunk = guide_message[i:i+20]
+                        stream_data = {
+                            'type': 'streaming',
+                            'speaker': '안내봇',
+                            'content': chunk
+                        }
+                        yield f"data: {json.dumps(stream_data)}\n\n"
+                        await asyncio.sleep(0.02)
+                    
+                    # 완료 신호
+                    complete_data = {
+                        'type': 'complete',
+                        'speaker': '안내봇',
+                        'turn': len(conversation_log) + 1,
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    yield f"data: {json.dumps(complete_data)}\n\n"
             
             yield f"data: {json.dumps({'type': 'end', 'message': '논쟁이 종료되었습니다.'})}\n\n"
             
