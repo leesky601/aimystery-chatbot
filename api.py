@@ -36,6 +36,10 @@ if os.path.exists("static"):
 chatbot_manager = ChatBotManager()
 product_manager = ProductManager()
 
+# 데이터 기반 논쟁 엔드포인트 임포트 및 등록
+from api_data_debate import register_data_debate_endpoints
+register_data_debate_endpoints(app)
+
 # 요청/응답 모델
 class ConversationRequest(BaseModel):
     topic: str
