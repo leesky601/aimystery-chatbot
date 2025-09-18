@@ -404,7 +404,6 @@ class ImprovedChatBotFlow:
         for benefit in benefits:
             if '선 결제' in benefit and '할인' in benefit:
                 # "구독 요금의 30% 선 결제 시, 월 2,600원 추가 할인" 같은 패턴 파싱
-                import re
                 discount_match = re.search(r'월\s*([\d,]+)원\s*(?:추가\s*)?할인', benefit)
                 if discount_match:
                     prepay_discount = int(discount_match.group(1).replace(',', ''))
